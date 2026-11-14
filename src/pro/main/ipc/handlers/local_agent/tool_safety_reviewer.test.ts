@@ -29,7 +29,10 @@ describe("mandatory tool reviewer", () => {
   it.each(["garbage", '{"decision":"allow"}'])(
     "blocks invalid shell verdict %s",
     async (text) => {
-      mocks.streamText.mockReturnValue({ text: Promise.resolve(text) });
+      mocks.streamText.mockReturnValue({
+        text: Promise.resolve(text),
+        response: Promise.resolve({ messages: [] }),
+      });
       expect(await reviewToolAction(input)).toEqual({
         decision: "block",
         unavailable: true,
@@ -187,11 +190,16 @@ it("reserves a verdict step and does not reopen inspections during format recove
   const inspect = vi.fn(async () => "ordinary app file");
   let calls = 0;
   let responseFormat: unknown;
+  let retryPrompt = "";
   const model = new MockLanguageModelV3({
     doStream: async (options) => {
       calls++;
       responseFormat = await options.responseFormat;
       const inspecting = !!options.tools?.length;
+      if (calls === 5) {
+        retryPrompt = JSON.stringify(options.prompt);
+        expect(inspecting).toBe(false);
+      }
       const chunks: LanguageModelV3StreamPart[] = [
         { type: "stream-start", warnings: [] },
       ];
@@ -202,6 +210,7 @@ it("reserves a verdict step and does not reopen inspections during format recove
             toolCallId: `inspect-${calls}-${i}`,
             toolName: "inspect_app_path",
             input: "{}",
+            providerMetadata: { openai: { itemId: `fc-${calls}-${i}` } },
           });
       } else {
         chunks.push(
@@ -247,6 +256,9 @@ it("reserves a verdict step and does not reopen inspections during format recove
   expect(result).toEqual({ decision: "allow", reason: "Inspected six files" });
   expect(inspect).toHaveBeenCalledTimes(6);
   expect(calls).toBe(5);
+  expect(retryPrompt.match(/ordinary app file/g)).toHaveLength(6);
+  expect(retryPrompt).not.toContain("itemId");
+  expect(retryPrompt).toContain("not a safety verdict");
   expect(responseFormat).toMatchObject({
     type: "json",
     schema: {
