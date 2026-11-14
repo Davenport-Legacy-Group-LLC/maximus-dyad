@@ -181,14 +181,16 @@ it("surfaces actionable catalog overflow without starting paid inference", async
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import type { LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import { z } from "zod";
-it("reserves a verdict step after six inspections across three tool rounds", async () => {
+it("reserves a verdict step and does not reopen inspections during format recovery", async () => {
   const actual = await vi.importActual<typeof import("ai")>("ai");
   mocks.streamText.mockImplementation(actual.streamText);
   const inspect = vi.fn(async () => "ordinary app file");
   let calls = 0;
+  let responseFormat: unknown;
   const model = new MockLanguageModelV3({
     doStream: async (options) => {
       calls++;
+      responseFormat = await options.responseFormat;
       const inspecting = !!options.tools?.length;
       const chunks: LanguageModelV3StreamPart[] = [
         { type: "stream-start", warnings: [] },
@@ -207,7 +209,10 @@ it("reserves a verdict step after six inspections across three tool rounds", asy
           {
             type: "text-delta",
             id: "verdict",
-            delta: '{"decision":"allow","reason":"Inspected six files"}',
+            delta:
+              calls === 4
+                ? "malformed verdict"
+                : '{"decision":"allow","reason":"Inspected six files"}',
           },
           { type: "text-end", id: "verdict" },
         );
@@ -241,7 +246,16 @@ it("reserves a verdict step after six inspections across three tool rounds", asy
   });
   expect(result).toEqual({ decision: "allow", reason: "Inspected six files" });
   expect(inspect).toHaveBeenCalledTimes(6);
-  expect(calls).toBe(4);
+  expect(calls).toBe(5);
+  expect(responseFormat).toMatchObject({
+    type: "json",
+    schema: {
+      properties: {
+        decision: { enum: ["allow", "ask", "block"] },
+      },
+      required: expect.arrayContaining(["decision", "reason"]),
+    },
+  });
 });
 
 /** One inspection round whose reasoning and tool call carry OpenAI itemIds. */
@@ -343,4 +357,160 @@ it("reports a failed follow-up request instead of an invalid verdict", async () 
     unavailable: true,
     reason: "Tool safety review failed during generation.",
   });
+});
+
+function mockVerdictModel(
+  responses: Array<string | Error | (() => Promise<never>)>,
+  formats: unknown[] = [],
+) {
+  let calls = 0;
+  const usage = {
+    inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 1, text: 1, reasoning: 0 },
+  };
+  const model = new MockLanguageModelV3({
+    doStream: async (options) => {
+      const index = calls++;
+      formats.push(await options.responseFormat);
+      const response = responses[index] ?? responses.at(-1)!;
+      if (response instanceof Error) throw response;
+      if (typeof response === "function") await response();
+      const text = typeof response === "string" ? response : "";
+      return {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: "stream-start", warnings: [] },
+            { type: "text-start", id: `verdict-${index}` },
+            { type: "text-delta", id: `verdict-${index}`, delta: text },
+            { type: "text-end", id: `verdict-${index}` },
+            {
+              type: "finish",
+              finishReason: { unified: "stop", raw: "stop" },
+              usage,
+            },
+          ],
+        }),
+      };
+    },
+  });
+  return { model, calls: () => calls };
+}
+
+async function reviewWithModel(
+  model: MockLanguageModelV3,
+  options: {
+    fallback?: "ask" | "block";
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
+) {
+  const actual = await vi.importActual<typeof import("ai")>("ai");
+  mocks.streamText.mockImplementation(actual.streamText);
+  mocks.getModelClient.mockResolvedValue({ modelClient: { model } });
+  return reviewToolAction({ ...input, ...options });
+}
+
+it("retries one malformed shell verdict with structured JSON output", async () => {
+  const formats: unknown[] = [];
+  const { model, calls } = mockVerdictModel(
+    ["not json", '{"decision":"allow","reason":"safe"}'],
+    formats,
+  );
+  const result = await reviewWithModel(model);
+  expect(result).toEqual({ decision: "allow", reason: "safe" });
+  expect(calls()).toBe(2);
+  expect(formats).toHaveLength(2);
+  for (const format of formats)
+    expect(format).toMatchObject({
+      type: "json",
+      schema: {
+        properties: {
+          decision: { enum: ["allow", "ask", "block"] },
+        },
+      },
+    });
+});
+
+it("fails closed after the single malformed-verdict retry", async () => {
+  const { model, calls } = mockVerdictModel(["bad one", "bad two"]);
+  expect(await reviewWithModel(model)).toEqual({
+    decision: "block",
+    unavailable: true,
+    reason: "The safety reviewer returned an invalid verdict.",
+  });
+  expect(calls()).toBe(2);
+});
+
+it("keeps the original deadline active during malformed-verdict recovery", async () => {
+  let retryStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    retryStarted = resolve;
+  });
+  const { model, calls } = mockVerdictModel([
+    "bad response",
+    async () => {
+      retryStarted();
+      return new Promise<never>(() => {});
+    },
+  ]);
+  const pending = reviewWithModel(model, { timeoutMs: 40 });
+  await started;
+  expect(await pending).toMatchObject({
+    decision: "block",
+    unavailable: true,
+    reason: "Tool safety review timed out.",
+  });
+  expect(calls()).toBe(2);
+});
+
+it("cancels malformed-verdict recovery without starting another generation", async () => {
+  let retryStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    retryStarted = resolve;
+  });
+  const controller = new AbortController();
+  const { model, calls } = mockVerdictModel([
+    "bad response",
+    async () => {
+      retryStarted();
+      return new Promise<never>(() => {});
+    },
+  ]);
+  const pending = reviewWithModel(model, {
+    signal: controller.signal,
+    timeoutMs: 10_000,
+  });
+  await started;
+  controller.abort();
+  expect(await pending).toMatchObject({
+    decision: "block",
+    unavailable: true,
+    reason: "Tool safety review was cancelled.",
+  });
+  expect(calls()).toBe(2);
+});
+
+it("does not format-retry a failed model stream", async () => {
+  const { model, calls } = mockVerdictModel([
+    new Error("private provider payload"),
+  ]);
+  expect(await reviewWithModel(model)).toMatchObject({
+    decision: "block",
+    unavailable: true,
+    reason: "Tool safety review failed during generation.",
+  });
+  // The SDK's one transport retry remains distinct from verdict recovery.
+  expect(calls()).toBe(2);
+});
+
+it("keeps MCP malformed verdicts on the existing ask fallback without format retry", async () => {
+  const { model, calls } = mockVerdictModel(["invalid MCP verdict"]);
+  expect(
+    await reviewWithModel(model, { fallback: "ask" }),
+  ).toMatchObject({
+    decision: "ask",
+    unavailable: true,
+    reason: "The safety reviewer returned an invalid verdict.",
+  });
+  expect(calls()).toBe(1);
 });

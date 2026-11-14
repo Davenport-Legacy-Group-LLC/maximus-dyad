@@ -10,6 +10,7 @@ import {
   protocol,
   net,
   nativeImage,
+  safeStorage,
   crashReporter,
   type Event as ElectronEvent,
 } from "electron";
@@ -180,6 +181,7 @@ import {
   formatPreviousSessionBanner,
   formatStartBanner,
 } from "./main/session_banner";
+import { IS_LOCAL_BUILD } from "./main/local_build_identity";
 
 const LAUNCH_TIME = Date.now();
 
@@ -419,17 +421,27 @@ if (fs.existsSync(gitDir)) {
 }
 
 // https://www.electronjs.org/docs/latest/tutorial/launch-app-from-url-in-another-app#main-process-mainjs
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient("dyad", process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
+if (!IS_LOCAL_BUILD) {
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient("dyad", process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    }
+  } else {
+    app.setAsDefaultProtocolClient("dyad");
   }
-} else {
-  app.setAsDefaultProtocolClient("dyad");
 }
 
 export async function onReady() {
+  if (IS_LOCAL_BUILD) {
+    logger.info("Local build secure-storage availability", {
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+      platform: process.platform,
+      profile: app.getPath("userData"),
+    });
+  }
+
   // Take over the sentinel before any startup work that can crash. Migrations,
   // the keychain and git all run below; if one of them kills us, a sentinel
   // still naming the previous session would report this crash as that one.
@@ -446,7 +458,9 @@ export async function onReady() {
   // Linux: claim the dyad:// scheme for this build (best-effort, see module).
   // setAsDefaultProtocolClient above is unreliable on Linux. Pass this instance's
   // userData so a browser-launched deep link forwards here, not a second window.
-  void registerDyadProtocolLinux(app.getPath("userData"));
+  if (!IS_LOCAL_BUILD) {
+    void registerDyadProtocolLinux(app.getPath("userData"));
+  }
 
   // React DevTools extension loading is intentionally disabled. In Electron it
   // can spam startup logs with:
@@ -662,8 +676,11 @@ export async function onReady() {
     managed_node_version: managedNodeVersion,
   });
 
-  logger.info("Auto-update enabled=", settings.enableAutoUpdate);
-  if (settings.enableAutoUpdate) {
+  logger.info(
+    "Auto-update enabled=",
+    !IS_LOCAL_BUILD && settings.enableAutoUpdate,
+  );
+  if (!IS_LOCAL_BUILD && settings.enableAutoUpdate) {
     // Technically we could just pass the releaseChannel directly to the host,
     // but this is more explicit and falls back to stable if there's an unknown
     // release channel.

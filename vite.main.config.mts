@@ -5,9 +5,13 @@ import { assertDeferredMainBootstrapBundle } from "./src/lib/main_bootstrap_bund
 import { posthogHiddenSourcemapsPlugin } from "./src/lib/posthog_sourcemaps";
 
 const nodeBuiltins = builtinModules.flatMap((name) => [name, `node:${name}`]);
+const isLocalBuild = process.env.DYAD_LOCAL_BUILD === "true";
 
 // https://vitejs.dev/config
 export default defineConfig(({ forgeConfigSelf }) => ({
+  define: {
+    __DYAD_LOCAL_BUILD__: JSON.stringify(isLocalBuild),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

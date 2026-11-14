@@ -55,6 +55,16 @@ let refreshing: Promise<Credentials> | undefined;
 function credentialPath() {
   return path.join(getUserDataPath(), "codex-subscription.enc");
 }
+function getSecureStoragePreconditionMessage() {
+  return process.platform === "darwin"
+    ? "Secure credential storage is unavailable. Unlock your login Keychain and allow macOS to access it, then restart the app before connecting ChatGPT."
+    : "Secure credential storage is unavailable. Configure an OS keyring before connecting ChatGPT.";
+}
+function getUnreadableCredentialMessage() {
+  return process.platform === "darwin"
+    ? "Saved ChatGPT credentials could not be opened. Unlock your login Keychain, allow macOS to access it, and restart the app; if the issue persists, reconnect ChatGPT or disconnect it to use your OpenAI API key."
+    : "Saved ChatGPT credentials could not be opened. Reconnect ChatGPT, or disconnect it to use your OpenAI API key.";
+}
 function requireEncryption() {
   if (
     !safeStorage.isEncryptionAvailable() ||
@@ -62,7 +72,7 @@ function requireEncryption() {
       safeStorage.getSelectedStorageBackend() === "basic_text")
   ) {
     throw new DyadError(
-      "Secure credential storage is unavailable. Configure an OS keyring before connecting ChatGPT.",
+      getSecureStoragePreconditionMessage(),
       DyadErrorKind.Precondition,
     );
   }
@@ -86,7 +96,7 @@ function load(): Credentials | undefined {
     // failures are throttled centrally; a temporary lock must not poison this
     // service's cache until the user reconnects or restarts.
     throw new DyadError(
-      "Saved ChatGPT credentials could not be opened. Reconnect ChatGPT, or disconnect it to use your OpenAI API key.",
+      getUnreadableCredentialMessage(),
       DyadErrorKind.Auth,
     );
   }

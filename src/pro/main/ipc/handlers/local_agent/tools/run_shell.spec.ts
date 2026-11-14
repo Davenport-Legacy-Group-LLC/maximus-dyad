@@ -307,47 +307,40 @@ it("does not offer approval of a policy block", async () => {
   );
   expect(ctx.requireConsent).not.toHaveBeenCalled();
 });
-it("still requires an explicit retry when review is unavailable", async () => {
-  mocks.settings.skipShellApprovalPrompts = true;
-  mocks.review
-    .mockResolvedValueOnce({
+it.each([true, false])(
+  "returns immediately when review is unavailable, even with approval bypass enabled (%s)",
+  async (skipApprovalPrompts) => {
+    mocks.settings.skipShellApprovalPrompts = skipApprovalPrompts;
+    mocks.review.mockResolvedValue({
       decision: "block",
       reason: "Timed out",
       unavailable: true,
-    })
-    .mockResolvedValueOnce({ decision: "allow", reason: "Safe bounded write" });
-  const result = JSON.parse(
-    await runShellTool.execute(
-      { command: writeCommand, description: "test" },
-      ctx,
-    ),
-  );
-  expect(result.status).toBe("completed");
-  expect(mocks.review).toHaveBeenCalledTimes(2);
-  expect(ctx.requireConsent).toHaveBeenCalledTimes(1);
-  expect(ctx.requireConsent).toHaveBeenCalledWith(
-    expect.objectContaining({ confirmation: "shell-review-retry" }),
-  );
-});
-it("never executes when an unavailable review retry is declined", async () => {
-  mocks.review.mockResolvedValue({
-    decision: "block",
-    reason: "Timed out",
-    unavailable: true,
-  });
-  vi.mocked(ctx.requireConsent).mockResolvedValue(false);
-  const result = JSON.parse(
-    await runShellTool.execute(
-      { command: writeCommand, description: "test" },
-      ctx,
-    ),
-  );
-  expect(result).toMatchObject({
-    status: "review_unavailable",
-    retryable: true,
-  });
-  await expect(readFile(path.join(directory, "result.txt"))).rejects.toThrow();
-});
+    });
+    const spawn = vi.spyOn(shellProcess, "runShellProcess");
+    try {
+      const result = JSON.parse(
+        await runShellTool.execute(
+          { command: writeCommand, description: "test" },
+          ctx,
+        ),
+      );
+      expect(result).toEqual({
+        status: "review_unavailable",
+        reason:
+          "Safety review is unavailable, so the command was not run. Try again when the safety reviewer is available.",
+        retryable: true,
+      });
+      expect(mocks.review).toHaveBeenCalledTimes(1);
+      expect(ctx.requireConsent).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(
+        readFile(path.join(directory, "result.txt")),
+      ).rejects.toThrow();
+    } finally {
+      spawn.mockRestore();
+    }
+  },
+);
 it("rechecks capability after one-time approval", async () => {
   mocks.review.mockResolvedValue({
     decision: "ask",
@@ -367,27 +360,6 @@ it("rechecks capability after one-time approval", async () => {
   await expect(readFile(path.join(directory, "result.txt"))).rejects.toThrow();
 });
 
-it("cancels while waiting for review retry without executing", async () => {
-  const controller = new AbortController();
-  ctx.abortSignal = controller.signal;
-  mocks.review.mockResolvedValue({
-    decision: "block",
-    reason: "Timed out",
-    unavailable: true,
-  });
-  vi.mocked(ctx.requireConsent).mockImplementation(async () => {
-    controller.abort();
-    return false;
-  });
-  const result = JSON.parse(
-    await runShellTool.execute(
-      { command: writeCommand, description: "test" },
-      ctx,
-    ),
-  );
-  expect(result.status).toBe("cancelled");
-  await expect(readFile(path.join(directory, "result.txt"))).rejects.toThrow();
-});
 
 import { appOperationCoordinator } from "@/ipc/services/app_operation_coordinator";
 import {
@@ -397,7 +369,7 @@ import {
 } from "../subagents/mutation_activity_tracker";
 import { randomUUID } from "node:crypto";
 
-it.each(["review", "approval", "retry"] as const)(
+it.each(["review", "approval"] as const)(
   "holds no app claims or mutation activity while waiting for %s",
   async (phase) => {
     const turnId = randomUUID();
@@ -430,11 +402,10 @@ it.each(["review", "approval", "retry"] as const)(
         return { decision: "allow", reason: "Safe" };
       });
     else {
-      mocks.review.mockResolvedValue(
-        phase === "retry"
-          ? { decision: "block", reason: "Offline", unavailable: true }
-          : { decision: "ask", reason: "Approval needed" },
-      );
+      mocks.review.mockResolvedValue({
+        decision: "ask",
+        reason: "Approval needed",
+      });
       vi.mocked(ctx.requireConsent).mockImplementation(async () => {
         await check();
         return false;

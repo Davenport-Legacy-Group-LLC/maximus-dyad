@@ -1,8 +1,7 @@
-import { stepCountIs, streamText, type ToolSet } from "ai";
+import { Output, stepCountIs, streamText, type ToolSet } from "ai";
 import { z } from "zod";
 import log from "electron-log";
 import { getModelClient } from "@/ipc/utils/get_model_client";
-import { fastTextOutput } from "@/ipc/utils/stream_text_utils";
 import { extractJson } from "@/ipc/utils/extract_json";
 import { cleanMessage } from "@/ipc/utils/ai_messages_utils";
 import type { UserSettings } from "@/lib/schemas";
@@ -20,6 +19,43 @@ export class ShellReviewCatalogTooLargeError extends Error {
       "The tool catalog is too large for safety review. Disconnect unused MCP servers or reduce their exposed tools, then retry.",
     );
   }
+}
+
+function verdictSchema(fallback: "ask" | "block") {
+  return z.object({
+    reason:
+      fallback === "block"
+        ? z.string().trim().min(1)
+        : z.string().optional(),
+    decision:
+      fallback === "block"
+        ? z.enum(["allow", "ask", "block"])
+        : z.enum(["allow", "ask"]),
+  });
+}
+
+class InvalidVerdictError extends Error {
+  constructor(readonly code: "empty" | "no-json" | "syntax" | "schema") {
+    super("Invalid safety verdict");
+  }
+}
+
+function parseVerdict<D extends "ask" | "block">(
+  text: string,
+  fallback: D,
+) {
+  if (!text.trim()) throw new InvalidVerdictError("empty");
+  const json = extractJson(text);
+  if (!json) throw new InvalidVerdictError("no-json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new InvalidVerdictError("syntax");
+  }
+  const result = verdictSchema(fallback).safeParse(parsed);
+  if (!result.success) throw new InvalidVerdictError("schema");
+  return result.data;
 }
 
 /** Policy-specific decisions share transport, cancellation, and fail-closed parsing. */
@@ -73,64 +109,64 @@ export async function reviewToolAction<D extends "ask" | "block">({
       );
       controller.signal.throwIfAborted();
       state.phase = "generation";
-      // streamText reports a failed follow-up request only through onError
-      // and still resolves with the steps completed before it, so record the
-      // failure instead of parsing an earlier tool-call step as the verdict.
-      let streamFailed = false;
-      let streamError: unknown;
-      const stream = streamText({
-        output: fastTextOutput(),
-        model: modelClient.model,
-        system,
-        maxRetries: 1,
-        abortSignal: controller.signal,
-        messages: [{ role: "user", content: payload }],
-        onError: ({ error }) => {
-          streamFailed = true;
-          streamError ??= error;
-        },
-        ...(tools
-          ? {
-              tools,
-              stopWhen: stepCountIs(4),
-              prepareStep: ({ stepNumber, messages }) => ({
-                // The engine sends OpenAI requests with `store: false`, so a
-                // replayed itemId becomes an unresolvable item_reference and
-                // the post-inspection request fails with "Item ... not found".
-                messages: messages.map(cleanMessage),
-                // Reserve the last round trip for a verdict instead of more inspection.
-                ...(stepNumber >= 3
-                  ? { toolChoice: "none" as const, activeTools: [] }
-                  : {}),
-              }),
-            }
-          : {}),
-      });
-      const text = await stream.text;
-      if (streamFailed)
-        throw streamError instanceof Error
-          ? streamError
-          : new Error("Tool safety review stream failed");
-      controller.signal.throwIfAborted();
-      state.phase = "verdict";
-      const json = extractJson(text);
-      if (!json) throw new Error("Missing decision");
-      const result = z
-        .object({
-          reason:
-            fallback === "block"
-              ? z.string().trim().min(1)
-              : z.string().optional(),
-          decision:
-            fallback === "block"
-              ? z.enum(["allow", "ask", "block"])
-              : z.enum(["allow", "ask"]),
-        })
-        .parse(JSON.parse(json));
-      logger.info("Review completed", {
-        decision: result.decision,
-        reason: result.reason?.slice(0, 500),
-      });
+      const schema = verdictSchema(fallback);
+      const generateVerdict = async (formatRetry: boolean) => {
+        // streamText reports a failed follow-up request only through onError
+        // and still resolves with the steps completed before it, so record the
+        // failure instead of parsing an earlier tool-call step as the verdict.
+        let streamFailed = false;
+        let streamError: unknown;
+        const stream = streamText({
+          output: Output.object({ schema }),
+          model: modelClient.model,
+          system,
+          maxRetries: 1,
+          abortSignal: controller.signal,
+          messages: [{ role: "user", content: payload }],
+          onError: ({ error }) => {
+            streamFailed = true;
+            streamError ??= error;
+          },
+          ...(tools
+            ? {
+                tools,
+                stopWhen: stepCountIs(4),
+                prepareStep: ({ stepNumber, messages }) => ({
+                  // The engine sends OpenAI requests with `store: false`, so a
+                  // replayed itemId becomes an unresolvable item_reference and
+                  // the post-inspection request fails with "Item ... not found".
+                  messages: messages.map(cleanMessage),
+                  // Format recovery is a fresh verdict request, not another inspection round.
+                  ...(formatRetry || stepNumber >= 3
+                    ? { toolChoice: "none" as const, activeTools: [] }
+                    : {}),
+                }),
+              }
+            : {}),
+        });
+        const text = await stream.text;
+        if (streamFailed)
+          throw streamError instanceof Error
+            ? streamError
+            : new Error("Tool safety review stream failed");
+        controller.signal.throwIfAborted();
+        state.phase = "verdict";
+        return parseVerdict(text, fallback);
+      };
+      let result;
+      try {
+        result = await generateVerdict(false);
+      } catch (error) {
+        if (!(error instanceof InvalidVerdictError) || fallback !== "block")
+          throw error;
+        logger.warn("Malformed safety verdict; requesting one fresh verdict", {
+          verdictErrorCode: error.code,
+        });
+        controller.signal.throwIfAborted();
+        state.phase = "generation";
+        result = await generateVerdict(true);
+      }
+      logger.info("Review completed", { decision: result.decision });
       return {
         decision: result.decision,
         reason: result.reason?.trim() || "No reason provided.",
@@ -151,6 +187,8 @@ export async function reviewToolAction<D extends "ask" | "block">({
     logger.warn(reason, {
       phase: state.phase,
       errorType: error instanceof Error ? error.name : "unknown",
+      verdictErrorCode:
+        error instanceof InvalidVerdictError ? error.code : undefined,
     });
     return { decision: fallback, reason, unavailable: true };
   } finally {

@@ -1,5 +1,6 @@
 import { app, dialog } from "electron";
 import log from "electron-log";
+import { initializeLocalBuildIdentity } from "./main/local_build_identity";
 // @ts-ignore electron-squirrel-startup does not provide TypeScript declarations
 import started from "electron-squirrel-startup";
 
@@ -32,6 +33,8 @@ function reportRuntimeLoadFailure(error: unknown): void {
 if (started) {
   app.quit();
 } else {
+  initializeLocalBuildIdentity();
+
   // Forge emits the main target as CommonJS, so Vite lowers this import to a
   // microtask-scheduled require. That still evaluates main's pre-ready
   // registrations before Electron can deliver the ready event on a later turn.

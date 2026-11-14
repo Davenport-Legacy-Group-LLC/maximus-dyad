@@ -94,7 +94,7 @@ export const runShellTool: ToolDefinition<z.infer<typeof schema>> = {
     if (ctx.abortSignal?.aborted)
       return JSON.stringify({ status: "cancelled" });
     present("reviewing", "Checking command safety…");
-    let decision = await reviewShellCommand(
+    const decision = await reviewShellCommand(
       args.command,
       args.description,
       ctx,
@@ -103,34 +103,16 @@ export const runShellTool: ToolDefinition<z.infer<typeof schema>> = {
       present("cancelled", "Cancelled before execution.", true);
       return JSON.stringify({ status: "cancelled" });
     }
-    // An outage has no safety verdict. Retry requires fresh review, never execution approval.
-    while (decision.unavailable && !ctx.abortSignal?.aborted) {
-      present("review unavailable", decision.reason);
-      const retry = await ctx.requireConsent({
-        toolName: "run_shell",
-        confirmation: "shell-review-retry",
-        toolDescription:
-          decision.reason +
-          " Retry runs the safety check again; it does not execute the command.",
-        inputPreview: runShellTool.getConsentPreview!(args),
-        abortSignal: ctx.abortSignal,
+    // Infrastructure failures are not verdicts or approval requests; no command ran.
+    if (decision.unavailable) {
+      const reason =
+        "Safety review is unavailable, so the command was not run. Try again when the safety reviewer is available.";
+      present("review unavailable", reason, true);
+      return JSON.stringify({
+        status: "review_unavailable",
+        reason,
+        retryable: true,
       });
-      if (ctx.abortSignal?.aborted) {
-        present("cancelled", "Cancelled before execution.", true);
-        return JSON.stringify({ status: "cancelled" });
-      }
-      if (!retry) {
-        present("review unavailable", decision.reason, true);
-        return JSON.stringify({
-          status: "review_unavailable",
-          reason: decision.reason,
-          retryable: true,
-        });
-      }
-      if (!available())
-        return blocked("Shell access was disabled before retrying.");
-      present("reviewing", "Retrying command safety review…");
-      decision = await reviewShellCommand(args.command, args.description, ctx);
     }
     if (ctx.abortSignal?.aborted) {
       present("cancelled", "Cancelled before execution.", true);

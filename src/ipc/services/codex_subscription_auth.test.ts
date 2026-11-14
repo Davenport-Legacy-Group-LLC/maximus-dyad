@@ -136,6 +136,32 @@ describe("subscription OAuth", () => {
     );
   });
 
+  it("gives macOS Keychain recovery guidance without changing encryption checks", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      configurable: true,
+    });
+    mocks.encryption = false;
+    try {
+      await expect(connectCodexSubscription()).rejects.toThrow(
+        "Unlock your login Keychain and allow macOS to access it, then restart the app",
+      );
+      fs.writeFileSync(
+        path.join(mocks.directory, "codex-subscription.enc"),
+        "saved-ciphertext",
+      );
+      expect(getCodexSubscriptionStatus()).toMatchObject({
+        credentialError: true,
+        error: expect.stringContaining(
+          "Unlock your login Keychain, allow macOS to access it, and restart the app",
+        ),
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it.each(["basic_text", "unavailable"])(
     "preserves Linux keyring guidance: %s",
     async (backend) => {

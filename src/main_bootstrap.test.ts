@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   quit: vi.fn(),
   showErrorBox: vi.fn(),
   runtimeLoaded: vi.fn(),
+  initializeLocalIdentity: vi.fn(),
   runtimeError: { value: undefined as Error | undefined },
   runtimeGate: { value: undefined as Promise<void> | undefined },
   resolveReady: { value: undefined as (() => void) | undefined },
@@ -56,12 +57,17 @@ describe("main process bootstrap", () => {
     mocks.quit.mockClear();
     mocks.showErrorBox.mockClear();
     mocks.runtimeLoaded.mockClear();
+    mocks.initializeLocalIdentity.mockClear();
     mocks.runtimeError.value = undefined;
     mocks.runtimeGate.value = undefined;
     mocks.resolveReady.value = undefined;
     mocks.squirrelStarted.value = true;
     mocks.whenReady.mockClear();
+    vi.doMock("./main/local_build_identity", () => ({
+      initializeLocalBuildIdentity: mocks.initializeLocalIdentity,
+    }));
     vi.doMock("./main", async () => {
+      expect(mocks.initializeLocalIdentity).toHaveBeenCalledOnce();
       await mocks.runtimeGate.value;
       if (mocks.runtimeError.value) {
         throw mocks.runtimeError.value;
@@ -76,6 +82,7 @@ describe("main process bootstrap", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(mocks.quit).toHaveBeenCalledOnce();
+    expect(mocks.initializeLocalIdentity).not.toHaveBeenCalled();
     expect(mocks.runtimeLoaded).not.toHaveBeenCalled();
     expect(mocks.whenReady).not.toHaveBeenCalled();
   });
@@ -157,6 +164,7 @@ describe("main process bootstrap", () => {
     expect(staticImports).toEqual([
       "electron",
       "electron-log",
+      "./main/local_build_identity",
       "electron-squirrel-startup",
     ]);
   });

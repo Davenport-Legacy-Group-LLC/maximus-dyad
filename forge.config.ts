@@ -148,6 +148,7 @@ const ignore = (file: string) => {
 };
 
 const isEndToEndTestBuild = process.env.E2E_TEST_BUILD === "true";
+const isLocalBuild = process.env.DYAD_LOCAL_BUILD === "true";
 const skipMacSigning = isEndToEndTestBuild || process.env.DYAD_SKIP_MAC_SIGNING === "true";
 const isWindowsSigningEnabled = process.env.WINDOWS_SIGN === "true";
 const shouldSkipNativeRebuild = process.env.DYAD_SKIP_NATIVE_REBUILD === "true";
@@ -167,6 +168,8 @@ if (isWindowsSigningEnabled && !process.env.AZURE_CODE_SIGNING_DLIB) {
 
 const config: ForgeConfig = {
   packagerConfig: {
+    name: isLocalBuild ? "Maximus Dyad" : undefined,
+    appBundleId: isLocalBuild ? "com.maximus.dyad" : undefined,
     // E2E test builds install local file: dependencies as links on Windows.
     // Dereference them so packaging does not require symlink privileges in the temp app.
     // Local file: native packages install as symlinks; dereference them so the
@@ -200,12 +203,14 @@ const config: ForgeConfig = {
         );
       },
     ],
-    protocols: [
-      {
-        name: "Dyad",
-        schemes: ["dyad"],
-      },
-    ],
+    protocols: isLocalBuild
+      ? undefined
+      : [
+          {
+            name: "Dyad",
+            schemes: ["dyad"],
+          },
+        ],
     icon: "./assets/icon/logo",
 
     osxSign: skipMacSigning
@@ -260,13 +265,13 @@ const config: ForgeConfig = {
     new MakerZIP({}, ["darwin"]),
     new MakerRpm({
       options: {
-        mimeType: ["x-scheme-handler/dyad"],
+        mimeType: isLocalBuild ? [] : ["x-scheme-handler/dyad"],
         icon: "./assets/icon/logo.png",
       },
     }),
     new MakerDeb({
       options: {
-        mimeType: ["x-scheme-handler/dyad"],
+        mimeType: isLocalBuild ? [] : ["x-scheme-handler/dyad"],
         icon: "./assets/icon/logo.png",
       },
     }),
