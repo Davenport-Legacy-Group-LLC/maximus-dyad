@@ -30,6 +30,26 @@ export function ShellExperimentSwitch() {
         approval; clear safety violations are blocked. Available only with the
         Host runtime.
       </div>
+      <div className="flex items-start gap-2 pt-2">
+        <Switch
+          id="skip-shell-approval-prompts"
+          aria-label="Skip shell command approval prompts"
+          checked={!!settings?.skipShellApprovalPrompts}
+          disabled={!isPro || !settings?.enableShellTool}
+          onCheckedChange={(checked) =>
+            updateSettings({ skipShellApprovalPrompts: checked })
+          }
+        />
+        <div className="space-y-1">
+          <Label htmlFor="skip-shell-approval-prompts">
+            Skip shell command approval prompts
+          </Label>
+          <div className="text-sm text-destructive">
+            Dangerous: host commands can access your files and tools. This skips
+            execution approval only; safety blocks still apply.
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

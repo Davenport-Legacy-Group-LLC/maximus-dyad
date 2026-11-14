@@ -137,15 +137,18 @@ export const runShellTool: ToolDefinition<z.infer<typeof schema>> = {
       return JSON.stringify({ status: "cancelled" });
     }
     if (decision.decision === "block") return blocked(decision.reason);
-    const approved = await ctx.requireConsent({
-      toolName: "run_shell",
-      ...(decision.decision === "ask"
-        ? { confirmation: "shell-approval" as const }
-        : {}),
-      toolDescription: decision.reason,
-      inputPreview: runShellTool.getConsentPreview!(args),
-      abortSignal: ctx.abortSignal,
-    });
+    const skipApproval = readSettings().skipShellApprovalPrompts === true;
+    const approved = skipApproval
+      ? true
+      : await ctx.requireConsent({
+          toolName: "run_shell",
+          ...(decision.decision === "ask"
+            ? { confirmation: "shell-approval" as const }
+            : {}),
+          toolDescription: decision.reason,
+          inputPreview: runShellTool.getConsentPreview!(args),
+          abortSignal: ctx.abortSignal,
+        });
     if (!approved || ctx.abortSignal?.aborted) {
       present("cancelled", "Command was not approved for execution.", true);
       return JSON.stringify({

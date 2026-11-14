@@ -42,6 +42,7 @@ export const SETTING_IDS = {
   enableCloudSandbox: "setting-enable-cloud-sandbox",
   autoApproveNonSchemaSql: "setting-auto-approve-non-schema-sql",
   enableShellTool: "setting-enable-shell-tool",
+  skipShellApprovalPrompts: "setting-skip-shell-approval-prompts",
   autoApproveSafeMcpTools: "setting-auto-approve-safe-mcp-tools",
   enableSandboxScriptExecution: "setting-enable-sandbox-script-execution",
   blockUnsafeNpmPackages: "setting-block-unsafe-npm-packages",
