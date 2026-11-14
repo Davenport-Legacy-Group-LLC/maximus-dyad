@@ -542,6 +542,15 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
     sectionLabel: "Experiments",
   },
   {
+    id: SETTING_IDS.skipShellApprovalPrompts,
+    label: "Skip shell command approval prompts",
+    description:
+      "Skip approval prompts before executing native shell commands; safety review blocks still apply",
+    keywords: ["shell", "bash", "powershell", "approval", "consent", "host"],
+    sectionId: SECTION_IDS.experiments,
+    sectionLabel: "Experiments",
+  },
+  {
     id: SETTING_IDS.autoApproveSafeMcpTools,
     label: "Skip consent for safe MCP tools",
     description:

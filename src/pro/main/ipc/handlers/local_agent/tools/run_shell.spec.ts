@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   deleteFunctions: vi.fn(),
   settings: {
     enableShellTool: true,
+    skipShellApprovalPrompts: false,
     enableDyadPro: true,
     providerSettings: { auto: { apiKey: { value: "test" } } },
     agentToolConsents: { run_shell: "always" },
@@ -33,6 +34,7 @@ let ctx: AgentContext;
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.settings.enableShellTool = true;
+  mocks.settings.skipShellApprovalPrompts = false;
   directory = await mkdtemp(path.join(os.tmpdir(), "dyad-shell-tool-"));
   ctx = {
     appId: 81234,
@@ -278,7 +280,23 @@ it.each([true, false])(
     }
   },
 );
+it("skips execution approval for an ask verdict when explicitly enabled", async () => {
+  mocks.settings.skipShellApprovalPrompts = true;
+  mocks.review.mockResolvedValue({
+    decision: "ask",
+    reason: "Consequential action",
+  });
+  const result = JSON.parse(
+    await runShellTool.execute(
+      { command: writeCommand, description: "test" },
+      ctx,
+    ),
+  );
+  expect(result.status).toBe("completed");
+  expect(ctx.requireConsent).not.toHaveBeenCalled();
+});
 it("does not offer approval of a policy block", async () => {
+  mocks.settings.skipShellApprovalPrompts = true;
   mocks.review.mockResolvedValue({
     decision: "block",
     reason: "Credential theft",
@@ -289,7 +307,8 @@ it("does not offer approval of a policy block", async () => {
   );
   expect(ctx.requireConsent).not.toHaveBeenCalled();
 });
-it("retries unavailable review before requesting execution consent", async () => {
+it("still requires an explicit retry when review is unavailable", async () => {
+  mocks.settings.skipShellApprovalPrompts = true;
   mocks.review
     .mockResolvedValueOnce({
       decision: "block",
@@ -305,13 +324,9 @@ it("retries unavailable review before requesting execution consent", async () =>
   );
   expect(result.status).toBe("completed");
   expect(mocks.review).toHaveBeenCalledTimes(2);
-  expect(ctx.requireConsent).toHaveBeenNthCalledWith(
-    1,
+  expect(ctx.requireConsent).toHaveBeenCalledTimes(1);
+  expect(ctx.requireConsent).toHaveBeenCalledWith(
     expect.objectContaining({ confirmation: "shell-review-retry" }),
-  );
-  expect(ctx.requireConsent).toHaveBeenNthCalledWith(
-    2,
-    expect.not.objectContaining({ confirmation: "shell-review-retry" }),
   );
 });
 it("never executes when an unavailable review retry is declined", async () => {

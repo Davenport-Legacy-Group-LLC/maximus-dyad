@@ -148,6 +148,7 @@ const ignore = (file: string) => {
 };
 
 const isEndToEndTestBuild = process.env.E2E_TEST_BUILD === "true";
+const skipMacSigning = isEndToEndTestBuild || process.env.DYAD_SKIP_MAC_SIGNING === "true";
 const isWindowsSigningEnabled = process.env.WINDOWS_SIGN === "true";
 const shouldSkipNativeRebuild = process.env.DYAD_SKIP_NATIVE_REBUILD === "true";
 const nativeRebuildModules = [
@@ -207,7 +208,7 @@ const config: ForgeConfig = {
     ],
     icon: "./assets/icon/logo",
 
-    osxSign: isEndToEndTestBuild
+    osxSign: skipMacSigning
       ? undefined
       : ({
           identity: process.env.APPLE_TEAM_ID,
@@ -218,7 +219,7 @@ const config: ForgeConfig = {
           // and the cwd scan crashes on broken symlinks like CLAUDE.md)
           preEmbedProvisioningProfile: false,
         } as Record<string, unknown>),
-    osxNotarize: isEndToEndTestBuild
+    osxNotarize: skipMacSigning
       ? undefined
       : {
           appleId: process.env.APPLE_ID!,

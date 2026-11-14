@@ -381,10 +381,14 @@ function buildTargetURL(clientReq) {
       ? rememberedBaseUrl.pathname
       : `${basePath}${incomingPath}`;
 
-  return new URL(
+  const target = new URL(
     `${targetPath}${incomingUrl.search}`,
     rememberedBaseUrl.origin,
   );
+  if (target.origin !== rememberedBaseUrl.origin) {
+    throw new Error("Invalid upstream target origin.");
+  }
+  return target;
 }
 
 /* ----------------------------------------------------------------------- */

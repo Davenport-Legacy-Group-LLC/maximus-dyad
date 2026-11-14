@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShellExperimentSwitch } from "./ShellExperimentSwitch";
-const mocks = vi.hoisted(() => ({ pro: true, updateSettings: vi.fn() }));
+const mocks = vi.hoisted(() => ({ pro: true, shell: false, updateSettings: vi.fn() }));
 vi.mock("@/hooks/useSettings", () => ({
   useSettings: () => ({
     settings: {
-      enableShellTool: false,
+      enableShellTool: mocks.shell,
+      skipShellApprovalPrompts: false,
       enableDyadPro: mocks.pro,
       providerSettings: { auto: { apiKey: { value: "test" } } },
     },
@@ -15,9 +16,21 @@ vi.mock("@/hooks/useSettings", () => ({
 afterEach(() => {
   cleanup();
   mocks.pro = true;
+  mocks.shell = false;
   mocks.updateSettings.mockClear();
 });
 describe("Shell experiment", () => {
+  it("persists the opt-in approval bypass when shell access is enabled", () => {
+    mocks.shell = true;
+    render(<ShellExperimentSwitch />);
+    fireEvent.click(screen.getByRole("switch", { name: "Skip shell command approval prompts" }));
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ skipShellApprovalPrompts: true });
+  });
+  it("disables approval bypass while shell access is off", () => {
+    render(<ShellExperimentSwitch />);
+    fireEvent.click(screen.getByRole("switch", { name: "Skip shell command approval prompts" }));
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
   it("persists the top-level setting", () => {
     render(<ShellExperimentSwitch />);
     fireEvent.click(screen.getByRole("switch", { name: "Shell tool (Pro)" }));

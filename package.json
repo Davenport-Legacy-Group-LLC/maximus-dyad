@@ -28,6 +28,7 @@
     "dev:engine": "cross-env DYAD_ENGINE_URL=http://localhost:8080/v1 npm start",
     "staging:engine": "cross-env DYAD_ENGINE_URL=https://staging---dyad-llm-engine-kq7pivehnq-uc.a.run.app/v1 npm start",
     "package": "npm run rebuild:keychain-reader && npm run clean && electron-forge package",
+    "package:local": "cross-env DYAD_SKIP_MAC_SIGNING=true npm run package",
     "make": "npm run rebuild:keychain-reader && npm run clean && electron-forge make",
     "publish": "npm run rebuild:keychain-reader && npm run clean && electron-forge publish",
     "rebuild:keychain-reader": "node scripts/rebuild-keychain-reader.mjs",
@@ -79,6 +80,7 @@
     "@biomejs/biome": "^1.9.4",
     "@dyad-sh/supabase-management-js": "v1.0.1",
     "@lexical/react": "^0.33.1",
+    "@lexical/utils": "^0.33.1",
     "@modelcontextprotocol/sdk": "^1.17.5",
     "@monaco-editor/react": "^4.7.0-rc.0",
     "@neondatabase/api-client": "^2.7.1",
@@ -157,8 +159,8 @@
     "update-electron-app": "^3.1.2",
     "use-sync-external-store": "^1.6.0",
     "uuid": "^11.1.0",
-    "yaml": "^2.8.1",
     "ws": "^8.19.0",
+    "yaml": "^2.8.1",
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
